@@ -7,8 +7,28 @@
     <title>AI ni Josh</title>
 </head>
 <body>
-    
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>AI ni Josh</h1>
+            <p class="model-info">Powered by Custom Ollama Model</p>
+        </div>
+
+        <div class="chat-messages" id="chatMessages"></div>
+
+        <div class="chat-footer">
+            <div class="input-area">
+                <textarea 
+                    id="messageInput" 
+                    class="message-input"
+                    placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+                    rows="3"
+                ></textarea>
+                <button id="sendButton" class="send-button">Send</button>
+            </div>
+            <div class="status" id="status"></div>
+        </div>
+    </div>
+
+    <script src="./chat.js"></script>
 </body>
-
-
 </html>

@@ -8,17 +8,21 @@ from pydantic import BaseModel
 
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-ALLOWED_MODEL_NAME = "chain"
+ALLOWED_MODEL_NAME = "sciefy"
 LOCAL_API_TOKEN = os.getenv("LOCAL_API_TOKEN")
 
 app = FastAPI(title="Local Chat Backend", version="1.0.0")
 
-# Restrictive CORS: allow only local frontends (Vite default ports)
+# Restrictive CORS: allow only local frontends (common dev ports)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
         "http://localhost",
         "http://127.0.0.1",
     ],
