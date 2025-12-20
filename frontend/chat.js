@@ -1,6 +1,7 @@
 // Global state
 let conversationHistory = [];
 let isLoading = false;
+let authToken = null;
 
 // DOM elements
 const chatMessagesDiv = document.getElementById('chatMessages');
@@ -11,13 +12,61 @@ const statusDiv = document.getElementById('status');
 // Configuration
 const API_BASE_URL = 'http://localhost:5000';
 const MODEL_NAME = 'sciefy';
-const LOCAL_API_TOKEN = null; // Set to a token string if authentication is required
 
 /**
- * Load conversation history from localStorage
+ * Get the authentication token
+ * Checks multiple sources in order of priority
+ */
+function getAuthToken() {
+    // 1. Check in-memory token (set during session)
+    if (authToken) {
+        return authToken;
+    }
+
+    // 2. Check sessionStorage (cleared when tab closes)
+    const sessionToken = sessionStorage.getItem('authToken');
+    if (sessionToken) {
+        authToken = sessionToken;
+        return authToken;
+    }
+
+    // 3. Check for token in URL parameters (e.g., ?token=xxx)
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlToken = urlParams.get('token');
+    if (urlToken) {
+        authToken = urlToken;
+        setAuthToken(urlToken); // Save it
+        return authToken;
+    }
+
+    return null;
+}
+
+/**
+ * Set and persist the authentication token
+ */
+function setAuthToken(token) {
+    authToken = token;
+    sessionStorage.setItem('authToken', token);
+    updateStatus('Token set successfully! Ready to chat.', 'success');
+    console.log('Authentication token saved');
+}
+
+/**
+ * Clear the authentication token
+ */
+function clearAuthToken() {
+    authToken = null;
+    sessionStorage.removeItem('authToken');
+    updateStatus('Token cleared. You can continue chatting if your backend allows it.', '');
+    console.log('Authentication token cleared');
+}
+
+/**
+ * Load conversation history from sessionStorage
  */
 function loadConversationHistory() {
-    const saved = localStorage.getItem('conversationHistory');
+    const saved = sessionStorage.getItem('conversationHistory');
     if (saved) {
         try {
             conversationHistory = JSON.parse(saved);
@@ -30,10 +79,10 @@ function loadConversationHistory() {
 }
 
 /**
- * Save conversation history to localStorage
+ * Save conversation history to sessionStorage
  */
 function saveConversationHistory() {
-    localStorage.setItem('conversationHistory', JSON.stringify(conversationHistory));
+    sessionStorage.setItem('conversationHistory', JSON.stringify(conversationHistory));
 }
 
 /**
@@ -45,6 +94,7 @@ function clearConversation() {
     chatMessagesDiv.innerHTML = '';
     statusDiv.innerHTML = '';
     messageInput.focus();
+    updateStatus('Conversation cleared. Start a new chat!', 'success');
 }
 
 /**
@@ -60,9 +110,6 @@ function renderMessages() {
 
 /**
  * Append a message to the DOM
- * @param {string} role - 'user' or 'assistant'
- * @param {string} content - message content
- * @param {boolean} animate - whether to animate the message
  */
 function appendMessageToDOM(role, content, animate = true) {
     const messageDiv = document.createElement('div');
@@ -82,7 +129,6 @@ function appendMessageToDOM(role, content, animate = true) {
 
 /**
  * Create a typing indicator element
- * @returns {HTMLElement} typing indicator element
  */
 function createTypingIndicator() {
     const indicator = document.createElement('div');
@@ -103,12 +149,20 @@ function createTypingIndicator() {
 
 /**
  * Update status message
- * @param {string} message - status message
- * @param {string} type - 'error', 'loading', or '' for normal
  */
 function updateStatus(message, type = '') {
     statusDiv.textContent = message;
     statusDiv.className = `status ${type}`;
+    
+    // Auto-clear success messages after 3 seconds
+    if (type === 'success') {
+        setTimeout(() => {
+            if (statusDiv.textContent === message) {
+                statusDiv.textContent = '';
+                statusDiv.className = 'status';
+            }
+        }, 3000);
+    }
 }
 
 /**
@@ -132,6 +186,20 @@ async function sendMessage() {
     if (isLoading) {
         updateStatus('Please wait for the current response', 'error');
         return;
+    }
+
+    // Get token (optional - will work without it if backend allows)
+    const token = getAuthToken();
+    
+    // Log token status for debugging
+    if (!token) {
+        console.warn('No authentication token found. Proceeding without token...');
+        console.info('To set a token, use one of these methods:');
+        console.info('1. URL parameter: ?token=your-token');
+        console.info('2. Console: setAuthToken("your-token")');
+        console.info('3. sessionStorage.setItem("authToken", "your-token")');
+    } else {
+        console.log('Using authentication token');
     }
 
     // Disable input while loading
@@ -164,17 +232,18 @@ async function sendMessage() {
         // Build request payload
         const payload = {
             model: MODEL_NAME,
-            messages: conversationHistory.slice(0, -1), // Exclude the empty assistant message we just added
+            messages: conversationHistory.slice(0, -1),
             stream: true,
         };
 
-        // Build headers
+        // Build headers with optional authentication
         const headers = {
             'Content-Type': 'application/json',
         };
-
-        if (LOCAL_API_TOKEN) {
-            headers['x-local-token'] = LOCAL_API_TOKEN;
+        
+        // Add token to headers only if it exists
+        if (token) {
+            headers['x-local-token'] = token;
         }
 
         // Fetch with streaming
@@ -185,16 +254,33 @@ async function sendMessage() {
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || `HTTP ${response.status}`);
+            let errorMessage = `HTTP ${response.status}`;
+            
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.detail || errorData.error || errorMessage;
+                
+                // Handle token-specific errors
+                if (response.status === 401 || response.status === 403) {
+                    clearAuthToken();
+                    errorMessage += '\n\nAuthentication required. Please set a valid token using:\n';
+                    errorMessage += '• URL parameter: ?token=your-token\n';
+                    errorMessage += '• Console: setAuthToken("your-token")';
+                    
+                    console.error('Authentication failed. Token may be invalid or expired.');
+                    console.info('Set a new token using setAuthToken("your-token")');
+                }
+            } catch (e) {
+                console.error('Failed to parse error response:', e);
+            }
+            
+            throw new Error(errorMessage);
         }
 
         // Handle streaming response
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let assistantContent = '';
-
-        // Remove typing indicator once we start receiving data
         let typingRemoved = false;
 
         while (true) {
@@ -272,15 +358,9 @@ async function sendMessage() {
     }
 }
 
-/**
- * Event listener for send button
- */
+// Event listeners
 sendButton.addEventListener('click', sendMessage);
 
-/**
- * Event listener for Enter key in textarea
- * Enter sends message, Shift+Enter creates new line
- */
 messageInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -288,11 +368,24 @@ messageInput.addEventListener('keydown', (e) => {
     }
 });
 
-/**
- * Initialize on page load
- */
+// Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     loadConversationHistory();
     messageInput.focus();
-    updateStatus('Ready to chat!');
+    
+    const token = getAuthToken();
+    if (token) {
+        updateStatus('Ready to chat!', 'success');
+        console.log('Authentication token loaded');
+    } else {
+        updateStatus('Ready to chat! (No token set - may require authentication)', '');
+        console.info('No authentication token set. The app will work if your backend allows it.');
+        console.info('To set a token, use: setAuthToken("your-token")');
+    }
 });
+
+// Expose utility functions globally
+window.setAuthToken = setAuthToken;
+window.clearAuthToken = clearAuthToken;
+window.getAuthToken = getAuthToken;
+window.clearConversation = clearConversation;
